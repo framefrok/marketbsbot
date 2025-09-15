@@ -2,7 +2,7 @@
 import mysql.connector
 from mysql.connector import Error
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import os
 from dotenv import load_dotenv
 
