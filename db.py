@@ -410,6 +410,7 @@ def remind_market_update():
             logger.error(f"Ошибка в задаче напоминания об обновлении данных: {e}")
             time.sleep(60)
 
+
 # Запуск фоновых задач
 def start_background_tasks():
     threading.Thread(target=cleanup_expired_alerts, daemon=True).start()
