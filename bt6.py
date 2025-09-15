@@ -27,6 +27,7 @@ from db import (
     update_user_settings,
     search_market_data,
     remove_alert
+    remind_market_update
 )
 
 # Загрузка токена
