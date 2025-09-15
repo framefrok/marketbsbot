@@ -44,9 +44,17 @@ STATE_ENTERING_TARGET_PRICE = "entering_target_price"
 
 # Парсинг сообщения рынка
 def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, float]]]:
+    """
+    Парсит сообщение рынка из игры и возвращает словарь цен по ресурсам.
+    Формат:
+        Дерево: 96,342,449🪵
+        📉Купить/продать: 8.31/6.80💰
+    """
     lines = text.strip().split('\n')
-    resource_pattern = r"^(.+?):.*?([0-9,]+)([🪵🪨🍞🐴])$"
-    price_pattern = r"([📈📉])?.*?Купить/продать:\s*([0-9.,]+)\s*/\s*([0-9.,]+).*?💰"
+    # Паттерн для строки с ресурсом и количеством (например: "Дерево: 96,342,449🪵")
+    resource_pattern = r"^(.+?):\s*[0-9,]*\s*([🪵🪨🍞🐴])$"
+    # Паттерн для строки с ценами (например: "📉Купить/продать: 8.31/6.80💰")
+    price_pattern = r"(?:[📈📉]?\s*)?Купить/продать:\s*([0-9.]+)\s*/\s*([0-9.]+)\s*💰"
 
     resources = {}
     current_resource = None
@@ -56,36 +64,39 @@ def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, float]]]:
         if not line or line == "🎪 Рынок":
             continue
 
+        # Проверяем, является ли строка заголовком ресурса
         res_match = re.match(resource_pattern, line)
         if res_match:
-            resource_name = res_match.group(1).strip()
             emoji_map = {"🪵": "Дерево", "🪨": "Камень", "🍞": "Провизия", "🐴": "Лошади"}
-            emoji = res_match.group(3)
-            normalized_name = emoji_map.get(emoji, resource_name)
+            emoji = res_match.group(2)
+            normalized_name = emoji_map.get(emoji, res_match.group(1).strip())
             current_resource = normalized_name
             continue
 
+        # Проверяем, содержит ли строка цены
         price_match = re.search(price_pattern, line)
         if price_match and current_resource:
-            # Удаляем запятые-разделители тысяч из цен
-            buy_str = price_match.group(2).replace(',', '')
-            sell_str = price_match.group(3).replace(',', '')
+            buy_str = price_match.group(1).strip()
+            sell_str = price_match.group(2).strip()
 
             try:
                 buy_price = float(buy_str)
                 sell_price = float(sell_str)
             except ValueError as e:
-                logger.error(f"Не удалось преобразовать цену: buy='{buy_str}', sell='{sell_str}' — {e}")
-                continue  # Пропускаем эту строку, если цены не распознаны
+                logger.error(f"Ошибка преобразования цен для {current_resource}: buy='{buy_str}', sell='{sell_str}' — {e}")
+                continue
 
             resources[current_resource] = {
                 "buy": buy_price,
                 "sell": sell_price
             }
-            current_resource = None
+            current_resource = None  # Сбрасываем, чтобы не привязать следующие цены к этому ресурсу
 
-    return resources if resources else None
+    if not resources:
+        logger.warning("Парсер не нашёл ни одного ресурса с ценами в сообщении.")
+        return None
 
+    return resources
 # Получение данных за последние N минут
 def get_recent_data(resource: str, minutes: int = 15) -> List[Dict]:
     MarketData = Query()
