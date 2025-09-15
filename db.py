@@ -2,12 +2,27 @@
 import mysql.connector
 from mysql.connector import Error
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Union  # Add Union here
+from typing import Dict, List, Optional, Union
 import os
 from dotenv import load_dotenv
 
-
 load_dotenv()
+
+def remove_alert(alert_id: int):
+    try:
+        connection = mysql.connector.connect(
+            host=os.getenv('MYSQL_HOST', 'localhost'),
+            database=os.getenv('MYSQL_DATABASE'),
+            user=os.getenv('MYSQL_USER'),
+            password=os.getenv('MYSQL_PASSWORD')
+        )
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM alerts WHERE id = %s", (alert_id,))
+        connection.commit()
+        cursor.close()
+        connection.close()
+    except Error as e:
+        print(f"Ошибка при удалении алерта: {e}")
 
 def init_db():
     try:
