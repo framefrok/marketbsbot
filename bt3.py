@@ -926,7 +926,7 @@ def cmd_timer(message):
 
         user_id = message.from_user.id
         bonus = get_user_bonus(user_id)
-        records = get_recent_data(resource, 15)
+        records = get_recent_data(resource, minutes=15)
         if len(records) < 2:
             bot.reply_to(message, f"⚠️ Недостаточно данных для {resource}. Пришлите еще обновления рынка.")
             return
@@ -967,6 +967,15 @@ def cmd_timer(message):
         # Сохраняем chat_id для группового чата, если команда отправлена из группы
         chat_id = message.chat.id if message.chat.type in ['group', 'supergroup'] else None
         
+        # Проверяем доступность группового чата
+        if chat_id and chat_id != user_id:
+            try:
+                bot.get_chat(chat_id)  # Проверка, что бот имеет доступ к чату
+            except Exception as e:
+                logger.error(f"Не удалось проверить доступ к групповому чату {chat_id}: {e}")
+                bot.reply_to(message, "⚠️ Не удалось подтвердить доступ к групповому чату. Уведомления будут отправлены только в личный чат.")
+                chat_id = None
+        
         alert_id = alerts_table.insert({
             "user_id": user_id,
             "resource": resource,
@@ -977,7 +986,8 @@ def cmd_timer(message):
             "alert_time": alert_time.isoformat(),
             "created_at": datetime.now().isoformat(),
             "status": "active",
-            "chat_id": chat_id  # Сохраняем chat_id для группового чата
+            "chat_id": chat_id,
+            "last_checked": datetime.now().isoformat()  # Для отслеживания последнего пересчета
         })
 
         alert_time_str = alert_time.strftime("%H:%M:%S")
@@ -993,9 +1003,6 @@ def cmd_timer(message):
             f"Ожидаемое время: {alert_time_str}\n\n"
             f"Бот оповестит вас, когда цена достигнет цели."
         )
-
-        # Запуск фоновой задачи для таймера
-        threading.Thread(target=schedule_alert, args=(alert_id, user_id, resource, target_price, alert_time, chat_id), daemon=True).start()
 
     except Exception as e:
         logger.error(f"Ошибка при установке таймера: {e}", exc_info=True)
