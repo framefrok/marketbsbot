@@ -1,8 +1,8 @@
 # db.py
 import mysql.connector
 from mysql.connector import Error
-from datetime import datetime
-from typing import Dict, List, Optional, Union
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Union  # Add Union here
 import os
 from dotenv import load_dotenv
 
