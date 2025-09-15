@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Union  # Add Union here
 import os
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 def init_db():
