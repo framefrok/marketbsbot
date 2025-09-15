@@ -194,6 +194,15 @@ def calculate_speed(records: List[Dict], price_type: str = "buy") -> Optional[fl
     speed = price_delta / time_delta_minutes
     return round(speed, 4)
 
+# Проверка прав бота в групповом чате
+def check_bot_permissions(chat_id: int) -> bool:
+    try:
+        chat_member = bot.get_chat_member(chat_id, bot.get_me().id)
+        return chat_member.can_send_messages
+    except Exception as e:
+        logger.error(f"Не удалось проверить права бота в чате {chat_id}: {e}")
+        return False
+
 
 # Проверка тренда (на базовых ценах)
 def get_trend(records: List[Dict], price_type: str = "buy") -> str:
@@ -269,7 +278,9 @@ def handle_market_forward(message):
             # Проверяем, есть ли хотя бы у одного ресурса >=2 записей за 15 минут
             for resource in EMOJI_TO_RESOURCE.values():
                 if len(get_recent_data(resource, 15)) >= 2:
-                    send_resource_selection(message.from_user.id)
+                    # Передаем chat_id, если сообщение отправлено в группе
+                    chat_id = message.chat.id if message.chat.type in ['group', 'supergroup'] else None
+                    send_resource_selection(message.from_user.id, chat_id)
                     break
             
             # Запускаем пересчет таймеров
@@ -283,14 +294,27 @@ def handle_market_forward(message):
         bot.reply_to(message, f"❌ Произошла ошибка: {str(e)}. Пожалуйста, попробуйте снова или свяжитесь с поддержкой.")
 
 # Отправка выбора ресурса
-def send_resource_selection(user_id: int):
+def send_resource_selection(user_id: int, chat_id: Optional[int] = None):
     buttons = [
         [InlineKeyboardButton(text=res, callback_data=f"resource_{res}")]
         for res in EMOJI_TO_RESOURCE.values()
     ]
     keyboard = InlineKeyboardMarkup(buttons)
-    bot.send_message(user_id, "📊 Выберите ресурс для отслеживания:", reply_markup=keyboard)
-
+    
+    # Формируем текст с тегом пользователя
+    username = bot.get_chat_member(user_id, user_id).user.username or 'User'
+    message_text = f"📊 @{username}, выберите ресурс для отслеживания:"
+    
+    # Отправка в личный чат
+    bot.send_message(user_id, message_text, reply_markup=keyboard)
+    
+    # Отправка в групповой чат, если указан
+    if chat_id and chat_id != user_id:
+        try:
+            bot.send_message(chat_id, message_text, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Не удалось отправить кнопки в групповой чат {chat_id}: {e}")
+            bot.send_message(user_id, f"⚠️ Не удалось отправить сообщение в групповой чат {chat_id}.")
 
 # Обработчик выбора ресурса
 @bot.callback_query_handler(func=lambda call: call.data.startswith('resource_'))
@@ -304,16 +328,17 @@ def process_resource_selection(call):
                         f"⚠️ Для {resource} недостаточно данных. Пришлите еще обновления рынка.")
         return
 
-    # Сохраняем состояние и данные
-    user_states[call.from_user.id] = STATE_CHOOSING_DIRECTION
-    user_data[call.from_user.id] = {"resource": resource}
+    # Сохраняем состояние, ресурс и chat_id
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id if call.message.chat.type in ['group', 'supergroup'] else None
+    user_states[user_id] = STATE_CHOOSING_DIRECTION
+    user_data[user_id] = {"resource": resource, "chat_id": chat_id}
 
     speed = calculate_speed(records, "buy")
     trend = get_trend(records, "buy")
     current_price = records[-1]["buy"]
     
     # Корректировка цены для пользователя
-    user_id = call.from_user.id
     bonus = get_user_bonus(user_id)
     adjusted_buy, _ = adjust_prices_for_user(user_id, current_price, records[-1]["sell"])
     adj_speed = speed / (1 + bonus) if speed is not None else None
@@ -329,13 +354,23 @@ def process_resource_selection(call):
     keyboard = InlineKeyboardMarkup(buttons)
     
     speed_text = f"{adj_speed:+.4f}" if adj_speed is not None else "неизвестно"
-    bot.send_message(
-        call.from_user.id, 
-        f"{trend_emoji} Вы выбрали {resource}. Текущая цена: {adjusted_buy:.2f}\n"
+    message_text = (
+        f"📊 @{call.from_user.username or 'User'}, вы выбрали {resource}. "
+        f"Текущая цена: {adjusted_buy:.2f}\n"
         f"Тренд: {trend_text} ({speed_text} в минуту)\n\n"
-        f"Что вас интересует?", 
-        reply_markup=keyboard
+        f"Что вас интересует?"
     )
+    
+    # Отправка в личный чат
+    bot.send_message(user_id, message_text, reply_markup=keyboard)
+    
+    # Отправка в групповой чат, если есть
+    if chat_id and chat_id != user_id:
+        try:
+            bot.send_message(chat_id, message_text, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+            bot.send_message(user_id, f"⚠️ Не удалось отправить сообщение в групповой чат {chat_id}.")
 
 
 # Обработчик отмены действий
@@ -356,6 +391,7 @@ def process_direction_selection(call):
     
     user_id = call.from_user.id
     resource = user_data[user_id]["resource"]
+    chat_id = user_data[user_id].get("chat_id")
     
     records = get_recent_data(resource, 15)
     current_price = records[-1]["buy"]
@@ -366,32 +402,53 @@ def process_direction_selection(call):
     
     if (direction == "down" and trend != "down") or (direction == "up" and trend != "up"):
         trend_text = "падает" if trend == "down" else "растёт" if trend == "up" else "стабильна"
-        bot.send_message(
-            user_id,
-            f"⚠️ Внимание! Цена {resource} сейчас {trend_text}, а вы выбрали "
-            f"{'падение' if direction == 'down' else 'рост'}. Уверены, что хотите продолжить?"
+        message_text = (
+            f"⚠️ @{call.from_user.username or 'User'}, внимание! Цена {resource} сейчас {trend_text}, "
+            f"а вы выбрали {'падение' if direction == 'down' else 'рост'}. "
+            f"Уверены, что хотите продолжить?"
         )
+        bot.send_message(user_id, message_text)
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, message_text)
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                bot.send_message(user_id, f"⚠️ Не удалось отправить сообщение в групповой чат {chat_id}.")
     
     user_data[user_id]["direction"] = direction
     user_states[user_id] = STATE_ENTERING_TARGET_PRICE
     
-    bot.send_message(
-        user_id, 
-        f"💰 Введите целевую цену для {resource} (например: {adjusted_buy * 0.9:.2f}):"
-    )
-
+    message_text = f"💰 @{call.from_user.username or 'User'}, введите целевую цену для {resource} (например: {adjusted_buy * 0.9:.2f}):"
+    bot.send_message(user_id, message_text)
+    if chat_id and chat_id != user_id:
+        try:
+            bot.send_message(chat_id, message_text)
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+            bot.send_message(user_id, f"⚠️ Не удалось отправить сообщение в групповой чат {chat_id}.")
 
 # Обработчик ввода целевой цены
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == STATE_ENTERING_TARGET_PRICE)
 def process_target_price(message):
     user_id = message.from_user.id
+    chat_id = user_data.get(user_id, {}).get("chat_id")
     try:
         target_price = float(message.text.strip().replace(',', '.'))
         if target_price <= 0:
             bot.reply_to(message, "❌ Цена должна быть положительным числом.")
+            if chat_id and chat_id != user_id:
+                try:
+                    bot.send_message(chat_id, f"❌ @{message.from_user.username or 'User'}, цена должна быть положительным числом.")
+                except Exception as e:
+                    logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
             return
     except ValueError:
         bot.reply_to(message, "❌ Пожалуйста, введите корректное число (например: 0.55).")
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, f"❌ @{message.from_user.username or 'User'}, пожалуйста, введите корректное число (например: 0.55).")
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
         return
 
     resource = user_data[user_id]["resource"]
@@ -400,6 +457,11 @@ def process_target_price(message):
     records = get_recent_data(resource, 15)
     if len(records) < 2:
         bot.reply_to(message, "⚠️ Недостаточно данных для расчета скорости. Пришлите еще обновления рынка.")
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, f"⚠️ @{message.from_user.username or 'User'}, недостаточно данных для расчета скорости. Пришлите еще обновления рынка.")
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
         user_states.pop(user_id, None)
         user_data.pop(user_id, None)
         return
@@ -407,31 +469,54 @@ def process_target_price(message):
     speed = calculate_speed(records, "buy")
     if speed is None:
         bot.reply_to(message, "⚠️ Не удалось рассчитать скорость изменения цены.")
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, f"⚠️ @{message.from_user.username or 'User'}, не удалось рассчитать скорость изменения цены.")
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
         user_states.pop(user_id, None)
         user_data.pop(user_id, None)
         return
 
     bonus = get_user_bonus(user_id)
-    adj_speed = speed / (1 + bonus)
+    adj_speed = speed / (1 + bonus) if direction == "down" else speed / (1 + bonus)
 
     current_price = records[-1]["buy"]
-    # Корректировка для пользователя
     adjusted_buy, _ = adjust_prices_for_user(user_id, current_price, records[-1]["sell"])
     price_diff = target_price - adjusted_buy
 
     if (direction == "down" and target_price >= adjusted_buy) or \
        (direction == "up" and target_price <= adjusted_buy):
-        bot.reply_to(message, f"⚠️ При {('падении' if direction == 'down' else 'росте')} целевая цена должна быть {('ниже' if direction == 'down' else 'выше')} текущей ({adjusted_buy:.2f}).")
+        message_text = f"⚠️ @{message.from_user.username or 'User'}, при {('падении' if direction == 'down' else 'росте')} целевая цена должна быть {('ниже' if direction == 'down' else 'выше')} текущей ({adjusted_buy:.2f})."
+        bot.reply_to(message, message_text)
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, message_text)
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
         return
 
     trend = get_trend(records, "buy")
     if (direction == "down" and trend == "up") or (direction == "up" and trend == "down"):
-        bot.reply_to(message,
-            "⚠️ Внимание! Выбранное направление противоречит текущему тренду. "
-            "Оповещение может никогда не сработать.")
+        message_text = (
+            f"⚠️ @{message.from_user.username or 'User'}, внимание! Выбранное направление противоречит текущему тренду. "
+            f"Оповещение может никогда не сработать."
+        )
+        bot.reply_to(message, message_text)
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, message_text)
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
 
     if (direction == "down" and adj_speed >= 0) or (direction == "up" and adj_speed <= 0):
-        bot.reply_to(message, "⚠️ Цена движется не в ту сторону, чтобы достичь вашей цели. Оповещение не будет установлено.")
+        message_text = f"⚠️ @{message.from_user.username or 'User'}, цена движется не в ту сторону, чтобы достичь вашей цели. Оповещение не будет установлено."
+        bot.reply_to(message, message_text)
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, message_text)
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
         user_states.pop(user_id, None)
         user_data.pop(user_id, None)
         return
@@ -444,34 +529,51 @@ def process_target_price(message):
         "target_price": target_price,
         "direction": direction,
         "speed": adj_speed,
-        "current_price": adjusted_buy,  # Сохраняем скорректированную
+        "current_price": adjusted_buy,
         "alert_time": alert_time.isoformat(),
         "created_at": datetime.now().isoformat(),
-        "status": "active"
+        "status": "active",
+        "chat_id": chat_id,
+        "message_id": None,
+        "last_checked": datetime.now().isoformat()
     })
 
     alert_time_str = alert_time.strftime("%H:%M:%S")
-    
-    bot.reply_to(
-        message,
-        f"✅ Таймер установлен!\n"
+    username = message.from_user.username or 'User'
+    notification_text = (
+        f"✅ @{username} установил таймер!\n"
         f"Ресурс: {resource}\n"
         f"Текущая цена: {adjusted_buy:.2f}\n"
         f"Цель: {target_price:.2f} ({'падение' if direction == 'down' else 'рост'})\n"
         f"Скорость: {adj_speed:+.4f} в минуту\n"
         f"Осталось: ~{int(time_minutes)} мин.\n"
-        f"Ожидаемое время: {alert_time_str}\n\n"
-        f"Бот оповестит вас, когда цена достигнет цели."
+        f"Ожидаемое время: {alert_time_str}"
     )
+
+    # Отправка в личный чат
+    sent_message = bot.reply_to(message, notification_text)
+    
+    # Закрепление в групповом чате
+    if chat_id and chat_id != user_id:
+        try:
+            chat = bot.get_chat(chat_id)
+            if chat.pinned_message:
+                bot.send_message(user_id, f"⚠️ @{username}, в группе уже есть закрепленное сообщение. Новое сообщение не будет закреплено.")
+            else:
+                bot.pin_chat_message(chat_id, sent_message.message_id, disable_notification=True)
+                alerts_table.update({'message_id': sent_message.message_id}, doc_ids=[alert_id])
+            bot.send_message(chat_id, notification_text)
+        except Exception as e:
+            logger.error(f"Не удалось отправить или закрепить сообщение в групповом чате {chat_id}: {e}")
+            bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить или закрепить сообщение в групповом чате {chat_id}.")
+
+    # Запуск фоновой задачи
+    threading.Thread(target=schedule_alert, args=(alert_id, user_id, resource, target_price, alert_time, chat_id), daemon=True).start()
 
     user_states.pop(user_id, None)
     user_data.pop(user_id, None)
 
-    # Запуск фоновой задачи
-    threading.Thread(target=schedule_alert, args=(alert_id, user_id, resource, target_price, alert_time), daemon=True).start()
 
-
-# Фоновая задача для отправки уведомления
 # Фоновая задача для отправки уведомления
 def schedule_alert(alert_id: int, user_id: int, resource: str, target_price: float, alert_time: datetime, chat_id: Optional[int] = None):
     now = datetime.now()
@@ -757,11 +859,11 @@ def cmd_help(message):
     help_text = (
         "📖 Полная инструкция по использованию бота\n\n"
         "1. Как начать:\n"
-        "• Перешлите в чат любое сообщение с рынка, начинающееся с эмодзи 🎪.\n"
+        "• Перешлите в чат (личный или групповой) любое сообщение с рынка, начинающееся с эмодзи 🎪.\n"
         "• Бот автоматически сохранит цены на ресурсы: Дерево, Камень, Провизия, Лошади.\n"
-        "• Как только накопится достаточно данных (минимум 2 записи за 15 минут), бот предложит настроить оповещение.\n\n"
+        "• Как только накопится достаточно данных (минимум 2 записи за 15 минут), бот предложит настроить оповещение с помощью кнопок (в личном и групповом чате, если применимо).\n\n"
         "2. Настройка оповещения:\n"
-        "• Выберите ресурс из списка.\n"
+        "• Выберите ресурс из списка кнопок.\n"
         "• Укажите направление: рост 📈 или падение 📉 цены.\n"
         "• Введите целевую цену.\n"
         "• Бот рассчитает примерное время срабатывания и оповестит вас, когда цена достигнет цели!\n\n"
@@ -777,12 +879,13 @@ def cmd_help(message):
         "  - /push start — включить напоминания.\n"
         "  - /push stop — отключить напоминания.\n"
         "• /settings — настроить бонусы от Якоря и знания торговли.\n"
-        "• /cancel — отменить все ваши активные оповещения.\n\n"
+        "• /cancel — отменить все ваши активные оповещения.\n"
+        "• /clear_group — удалить ссылки на групповые чаты из ваших таймеров.\n\n"
         "4. Важно:\n"
         "• Бот работает на основе вашей личной истории цен. Чем чаще вы присылаете данные рынка, тем точнее прогнозы.\n"
         "• Если цена резко изменила направление движения, оповещение может не сработать. Бот пришлет уведомление, если цель не будет достигнута в расчетное время.\n"
         "• Просроченные оповещения (которые не сработали вовремя) автоматически удаляются из списка активных через час.\n"
-        "• В групповых чатах сообщения о таймерах закрепляются и открепляются по завершении."
+        "• В групповых чатах сообщения о таймерах закрепляются и открепляются по завершении. Кнопки выбора ресурса и направления доступны в группах, если бот имеет права на отправку сообщений."
     )
     bot.reply_to(message, help_text)
 
