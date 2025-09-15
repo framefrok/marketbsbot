@@ -462,7 +462,8 @@ def process_target_price(message):
 
 
 # Фоновая задача для отправки уведомления
-def schedule_alert(alert_id: int, user_id: int, resource: str, target_price: float, alert_time: datetime):
+# Фоновая задача для отправки уведомления
+def schedule_alert(alert_id: int, user_id: int, resource: str, target_price: float, alert_time: datetime, chat_id: Optional[int] = None):
     now = datetime.now()
     sleep_seconds = (alert_time - now).total_seconds()
 
@@ -477,7 +478,7 @@ def schedule_alert(alert_id: int, user_id: int, resource: str, target_price: flo
     try:
         latest_data = get_latest_data(resource)
         if not latest_data:
-            raise ValueError(f"No latest data found for resource: {resource}")
+            raise ValueError(f"Нет последних данных для ресурса: {resource}")
 
         # Корректировка текущей цены для пользователя
         current_price, _ = adjust_prices_for_user(user_id, latest_data['buy'], latest_data['sell'])
@@ -489,23 +490,28 @@ def schedule_alert(alert_id: int, user_id: int, resource: str, target_price: flo
         elif direction == "up" and current_price >= target_price:
             is_target_reached = True
 
-        if is_target_reached:
-            bot.send_message(
-                user_id,
-                f"🔔 {resource} достигла целевой цены!\n"
-                f"Цель: {target_price:.2f}\n"
-                f"Текущая цена: {current_price:.2f}\n\n"
-                f"Время {'покупать!' if direction == 'down' else 'продавать!'}"
-            )
-            alerts_table.update({'status': 'completed'}, doc_ids=[alert_id])
-        else:
-            bot.send_message(
-                user_id,
-                f"⏰ Таймер для {resource} сработал, но цель ({target_price:.2f}) "
-                f"еще не достигнута (текущая цена: {current_price:.2f}).\n"
-                f"Скорость рынка, вероятно, изменилась."
-            )
-            alerts_table.update({'status': 'expired'}, doc_ids=[alert_id])
+        notification_text = (
+            f"🔔 {resource} достигла целевой цены!\n"
+            f"Цель: {target_price:.2f}\n"
+            f"Текущая цена: {current_price:.2f}\n\n"
+            f"Время {'покупать!' if direction == 'down' else 'продавать!'}"
+        ) if is_target_reached else (
+            f"⏰ Таймер для {resource} сработал, но цель ({target_price:.2f}) "
+            f"еще не достигнута (текущая цена: {current_price:.2f}).\n"
+            f"Скорость рынка, вероятно, изменилась."
+        )
+
+        # Отправка уведомления пользователю
+        bot.send_message(user_id, notification_text)
+        
+        # Отправка в групповой чат, если указан chat_id
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, f"@{bot.get_chat_member(user_id, user_id).user.username or 'User'} {notification_text}")
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление в групповой чат {chat_id}: {e}")
+
+        alerts_table.update({'status': 'completed' if is_target_reached else 'expired'}, doc_ids=[alert_id])
 
     except Exception as e:
         logger.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
@@ -895,10 +901,164 @@ def cmd_stat(message):
         logger.error(f"Ошибка при выполнении команды /stat: {e}", exc_info=True)
         bot.reply_to(message, "❌ Произошла ошибка при получении статистики.")
 
+# Команда /timer [Вид Ресурса] [цель цены]
+@bot.message_handler(commands=['timer'])
+def cmd_timer(message):
+    try:
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        if len(args) != 2:
+            bot.reply_to(message, "❌ Формат команды: /timer <ресурс> <целевая цена>\nПример: /timer Дерево 8.50")
+            return
+
+        resource = args[0].capitalize()
+        if resource not in EMOJI_TO_RESOURCE.values():
+            bot.reply_to(message, f"❌ Неверный ресурс. Доступны: {', '.join(EMOJI_TO_RESOURCE.values())}")
+            return
+
+        try:
+            target_price = float(args[1].replace(',', '.'))
+            if target_price <= 0:
+                bot.reply_to(message, "❌ Цена должна быть положительным числом.")
+                return
+        except ValueError:
+            bot.reply_to(message, "❌ Пожалуйста, введите корректное число для цены (например: 8.50).")
+            return
+
+        user_id = message.from_user.id
+        bonus = get_user_bonus(user_id)
+        records = get_recent_data(resource, 15)
+        if len(records) < 2:
+            bot.reply_to(message, f"⚠️ Недостаточно данных для {resource}. Пришлите еще обновления рынка.")
+            return
+
+        latest = get_latest_data(resource)
+        current_price = latest["buy"]
+        adjusted_buy, _ = adjust_prices_for_user(user_id, current_price, latest["sell"])
+        
+        # Определяем направление
+        direction = "down" if target_price < adjusted_buy else "up"
+        
+        speed = calculate_speed(records, "buy")
+        if speed is None:
+            bot.reply_to(message, "⚠️ Не удалось рассчитать скорость изменения цены.")
+            return
+
+        adj_speed = speed / (1 + bonus) if direction == "down" else speed / (1 + bonus)
+        
+        if (direction == "down" and target_price >= adjusted_buy) or \
+           (direction == "up" and target_price <= adjusted_buy):
+            bot.reply_to(message, f"⚠️ При {('падении' if direction == 'down' else 'росте')} целевая цена должна быть {('ниже' if direction == 'down' else 'выше')} текущей ({adjusted_buy:.2f}).")
+            return
+
+        trend = get_trend(records, "buy")
+        if (direction == "down" and trend == "up") or (direction == "up" and trend == "down"):
+            bot.reply_to(message,
+                "⚠️ Внимание! Выбранное направление противоречит текущему тренду. "
+                "Оповещение может никогда не сработать.")
+
+        if (direction == "down" and adj_speed >= 0) or (direction == "up" and adj_speed <= 0):
+            bot.reply_to(message, "⚠️ Цена движется не в ту сторону, чтобы достичь вашей цели. Оповещение не будет установлено.")
+            return
+
+        price_diff = target_price - adjusted_buy
+        time_minutes = abs(price_diff) / abs(adj_speed)
+        alert_time = datetime.now() + timedelta(minutes=time_minutes)
+        
+        # Сохраняем chat_id для группового чата, если команда отправлена из группы
+        chat_id = message.chat.id if message.chat.type in ['group', 'supergroup'] else None
+        
+        alert_id = alerts_table.insert({
+            "user_id": user_id,
+            "resource": resource,
+            "target_price": target_price,
+            "direction": direction,
+            "speed": adj_speed,
+            "current_price": adjusted_buy,
+            "alert_time": alert_time.isoformat(),
+            "created_at": datetime.now().isoformat(),
+            "status": "active",
+            "chat_id": chat_id  # Сохраняем chat_id для группового чата
+        })
+
+        alert_time_str = alert_time.strftime("%H:%M:%S")
+        
+        bot.reply_to(
+            message,
+            f"✅ Таймер установлен!\n"
+            f"Ресурс: {resource}\n"
+            f"Текущая цена: {adjusted_buy:.2f}\n"
+            f"Цель: {target_price:.2f} ({'падение' if direction == 'down' else 'рост'})\n"
+            f"Скорость: {adj_speed:+.4f} в минуту\n"
+            f"Осталось: ~{int(time_minutes)} мин.\n"
+            f"Ожидаемое время: {alert_time_str}\n\n"
+            f"Бот оповестит вас, когда цена достигнет цели."
+        )
+
+        # Запуск фоновой задачи для таймера
+        threading.Thread(target=schedule_alert, args=(alert_id, user_id, resource, target_price, alert_time, chat_id), daemon=True).start()
+
+    except Exception as e:
+        logger.error(f"Ошибка при установке таймера: {e}", exc_info=True)
+        bot.reply_to(message, "❌ Произошла ошибка при установке таймера.")
+
+# Фоновая задача для проверки изменения тренда
+def check_trend_changes():
+    while True:
+        try:
+            Alert = Query()
+            active_alerts = alerts_table.search(Alert.status == 'active')
+            
+            for alert in active_alerts:
+                user_id = alert['user_id']
+                resource = alert['resource']
+                direction = alert['direction']
+                target_price = alert['target_price']
+                chat_id = alert.get('chat_id')
+
+                records = get_recent_data(resource, minutes=15)
+                if len(records) < 2:
+                    continue
+
+                current_trend = get_trend(records, "buy")
+                if (direction == "down" and current_trend == "up") or \
+                   (direction == "up" and current_trend == "down"):
+                    latest_data = get_latest_data(resource)
+                    current_price, _ = adjust_prices_for_user(user_id, latest_data['buy'], latest_data['sell'])
+                    
+                    notification_text = (
+                        f"⚠️ Внимание! Тренд для {resource} изменился!\n"
+                        f"Вы ждете {'падение' if direction == 'down' else 'рост'} до {target_price:.2f}, "
+                        f"но цена сейчас {'растет' if current_trend == 'up' else 'падает'}.\n"
+                        f"Текущая цена: {current_price:.2f}\n"
+                        f"Оповещение может не сработать."
+                    )
+                    
+                    # Отправка уведомления пользователю
+                    bot.send_message(user_id, notification_text)
+                    
+                    # Отправка в групповой чат, если указан
+                    if chat_id and chat_id != user_id:
+                        try:
+                            bot.send_message(
+                                chat_id,
+                                f"@{bot.get_chat_member(user_id, user_id).user.username or 'User'} {notification_text}"
+                            )
+                        except Exception as e:
+                            logger.error(f"Не удалось отправить уведомление в групповой чат {chat_id}: {e}")
+
+                    # Деактивируем таймер, чтобы избежать повторных уведомлений
+                    alerts_table.update({'status': 'trend_changed'}, doc_ids=[alert.doc_id])
+
+        except Exception as e:
+            logger.error(f"Ошибка при проверке изменения тренда: {e}")
+
+        time.sleep(300)  # Проверка каждые 5 минут
+
 
 # Запуск фоновых задач
 def start_background_tasks():
     threading.Thread(target=cleanup_expired_alerts, daemon=True).start()
+    threading.Thread(target=check_trend_changes, daemon=True).start()
 
 
 # Запуск бота
