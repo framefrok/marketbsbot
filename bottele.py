@@ -608,58 +608,95 @@ def cmd_help(message):
     bot.reply_to(message, help_text)
 
 
-# Команда /stat
+# Команда /stat — улучшенная версия
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     try:
         now = datetime.now()
-        text = f"📊 <b>Текущая статистика рынка</b>\n"
-        text += f"🕒 Время: {now.strftime('%d.%m.%Y %H:%M:%S')}\n\n"
+        text = (
+            f"📊 <b>Текущая статистика рынка</b>\n"
+            f"🕗 Обновлено: {now.strftime('%d.%m.%Y %H:%M')}\n"
+            f"{'='*35}\n\n"
+        )
 
         resources = list(EMOJI_TO_RESOURCE.values())
         week_ago = int((now - timedelta(days=7)).timestamp())
 
+        # Эмодзи для ресурсов (для красоты)
+        RESOURCE_EMOJI = {
+            "Дерево": "🪵",
+            "Камень": "🪨",
+            "Провизия": "🍞",
+            "Лошади": "🐴"
+        }
+
         for resource in resources:
+            emoji = RESOURCE_EMOJI.get(resource, "🔸")
             latest = get_latest_data(resource)
             if not latest:
-                text += f"🔸 {resource}: <i>нет данных</i>\n"
+                text += f"{emoji} <b>{resource}</b>: ❌ нет данных\n\n"
                 continue
 
             current_buy = latest['buy']
             current_sell = latest['sell']
 
             MarketData = Query()
+            # Ищем все записи за неделю
             week_records = market_table.search(
                 (MarketData.resource == resource) & (MarketData.timestamp >= week_ago)
             )
 
             if week_records:
+                # Макс/мин цены
                 max_buy = max(r['buy'] for r in week_records)
                 max_sell = max(r['sell'] for r in week_records)
                 min_buy = min(r['buy'] for r in week_records)
                 min_sell = min(r['sell'] for r in week_records)
+                # Макс количество (если есть в данных)
+                max_qty = max(
+                    (r.get('quantity', 0) for r in week_records),
+                    default=0
+                )
             else:
                 max_buy = min_buy = current_buy
                 max_sell = min_sell = current_sell
+                max_qty = 0
 
+            # Тренд за последние 60 минут
             recent = get_recent_data(resource, minutes=60)
-            trend_text = "неизвестно"
+            trend_icon = "❓"
+            trend_desc = "неизвестно"
             if len(recent) >= 2:
                 speed = calculate_speed(recent, "buy")
                 trend = get_trend(recent, "buy")
                 if trend == "up":
-                    trend_text = f"растёт 📈 ({speed:+.4f}/мин)"
+                    trend_icon = "📈"
+                    trend_desc = f"растёт ({speed:+.4f}/мин)"
                 elif trend == "down":
-                    trend_text = f"падает 📉 ({speed:+.4f}/мин)"
+                    trend_icon = "📉"
+                    trend_desc = f"падает ({speed:+.4f}/мин)"
                 else:
-                    trend_text = "стабильна ➡️"
+                    trend_icon = "➖"
+                    trend_desc = "стабильна"
 
+            # Форматируем количество с разделителями тысяч
+            qty_str = f"{max_qty:,}".replace(",", " ") if max_qty > 0 else "не учтено"
+
+            # Форматируем красиво
             text += (
-                f"🔸 {resource}:\n"
-                f"   Покупка: {current_buy:.2f} (max: {max_buy:.2f}, min: {min_buy:.2f})\n"
-                f"   Продажа: {current_sell:.2f} (max: {max_sell:.2f}, min: {min_sell:.2f})\n"
-                f"   Тренд: {trend_text}\n\n"
+                f"{emoji} <b>{resource}</b>\n"
+                f"├ 💹 Покупка:   {current_buy:>6.2f} 💰 "
+                f"(↑{max_buy:.2f} ↓{min_buy:.2f})\n"
+                f"├ 💰 Продажа:  {current_sell:>6.2f} 💰 "
+                f"(↑{max_sell:.2f} ↓{min_sell:.2f})\n"
+                f"├ 📊 Макс. кол-во: {qty_str:>10} шт.\n"
+                f"└ 📈 Тренд: {trend_icon} {trend_desc}\n\n"
             )
+
+        # Добавим подвал
+        text += f"{'='*35}\n"
+        text += f"📈 — рост | 📉 — падение | ➖ — стабильно\n"
+        text += f"↑ — макс. цена за неделю | ↓ — мин. цена за неделю"
 
         bot.reply_to(message, text, parse_mode="HTML")
 
