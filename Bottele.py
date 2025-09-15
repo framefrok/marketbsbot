@@ -67,8 +67,17 @@ def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, float]]]:
 
         price_match = re.search(price_pattern, line)
         if price_match and current_resource:
-            buy_price = float(price_match.group(2).replace(',', '.'))
-            sell_price = float(price_match.group(3).replace(',', '.'))
+            # Удаляем запятые-разделители тысяч из цен
+            buy_str = price_match.group(2).replace(',', '')
+            sell_str = price_match.group(3).replace(',', '')
+
+            try:
+                buy_price = float(buy_str)
+                sell_price = float(sell_str)
+            except ValueError as e:
+                logger.error(f"Не удалось преобразовать цену: buy='{buy_str}', sell='{sell_str}' — {e}")
+                continue  # Пропускаем эту строку, если цены не распознаны
+
             resources[current_resource] = {
                 "buy": buy_price,
                 "sell": sell_price
