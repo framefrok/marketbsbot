@@ -1028,6 +1028,9 @@ def cmd_timer(message):
         if chat_id:
             bot.send_message(user_id, notification_text)
 
+        # Запуск фоновой задачи schedule_alert
+        threading.Thread(target=schedule_alert, args=(alert_id, user_id, resource, target_price, alert_time, chat_id), daemon=True).start()
+
     except Exception as e:
         logger.error(f"Ошибка при установке таймера: {e}", exc_info=True)
         bot.reply_to(message, "❌ Произошла ошибка при установке таймера.")
@@ -1200,11 +1203,11 @@ def update_dynamic_timers():
                             logger.error(f"Не удалось отправить уведомление в групповой чат {chat_id}: {e}")
                             bot.send_message(user_id, "⚠️ Не удалось отправить уведомление в группу.")
         
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении таймеров: {e}")
+        
         time.sleep(60)  # Проверка каждую минуту
-    
-    except Exception as e:
-        logger.error(f"Ошибка при обновлении таймеров: {e}")
-
+        
 # Однократный пересчет таймеров после новых данных рынка
 def update_dynamic_timers_once():
     try:
@@ -1321,7 +1324,6 @@ def update_dynamic_timers_once():
     
     except Exception as e:
         logger.error(f"Ошибка при однократном обновлении таймеров: {e}")
-
 
 # Запуск фоновых задач
 def start_background_tasks():
