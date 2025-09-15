@@ -1160,29 +1160,54 @@ def cmd_push(message):
     try:
         args = message.text.split()[1:] if len(message.text.split()) > 1 else []
         user_id = message.from_user.id
+        username = message.from_user.username or 'User'
         settings = get_user_settings(user_id)
+        chat_id = message.chat.id if message.chat.type in ['group', 'supergroup'] else None
         
+        # Показать текущие настройки, если аргументов нет
         if not args:
-            # Показать текущие настройки
             status = "включены" if settings['push_enabled'] else "отключены"
-            bot.reply_to(
-                message,
-                f"🔔 Настройки напоминаний:\n"
+            message_text = (
+                f"🔔 @{username}, настройки напоминаний:\n"
                 f"Статус: {status}\n"
                 f"Интервал: {settings['push_interval']} минут\n\n"
                 f"Используйте:\n"
-                f"/push interval <минуты> — установить интервал\n"
+                f"/push interval <минуты> — установить интервал (5–120 минут)\n"
                 f"/push start — включить напоминания\n"
                 f"/push stop — отключить напоминания"
             )
+            bot.reply_to(message, message_text)
+            if chat_id and chat_id != user_id:
+                try:
+                    bot.send_message(chat_id, message_text)
+                except Exception as e:
+                    logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                    bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
             return
         
         command = args[0].lower()
-        if command == 'interval' and len(args) > 1:
+        if command == 'interval':
+            if len(args) < 2:
+                message_text = f"❌ @{username}, укажите интервал в минутах (например: /push interval 30)."
+                bot.reply_to(message, message_text)
+                if chat_id and chat_id != user_id:
+                    try:
+                        bot.send_message(chat_id, message_text)
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                        bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
+                return
             try:
                 interval = int(args[1])
                 if interval < 5 or interval > 120:
-                    bot.reply_to(message, "❌ Интервал должен быть от 5 до 120 минут.")
+                    message_text = f"❌ @{username}, интервал должен быть от 5 до 120 минут."
+                    bot.reply_to(message, message_text)
+                    if chat_id and chat_id != user_id:
+                        try:
+                            bot.send_message(chat_id, message_text)
+                        except Exception as e:
+                            logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                            bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
                     return
                 save_user_settings(
                     user_id,
@@ -1191,9 +1216,23 @@ def cmd_push(message):
                     push_interval=interval,
                     push_enabled=settings['push_enabled']
                 )
-                bot.reply_to(message, f"✅ Интервал напоминаний установлен: {interval} минут.")
+                message_text = f"✅ @{username}, интервал напоминаний установлен: {interval} минут."
+                bot.reply_to(message, message_text)
+                if chat_id and chat_id != user_id:
+                    try:
+                        bot.send_message(chat_id, message_text)
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                        bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
             except ValueError:
-                bot.reply_to(message, "❌ Пожалуйста, укажите корректное число для интервала (например: /push interval 30).")
+                message_text = f"❌ @{username}, пожалуйста, укажите корректное число для интервала (например: /push interval 30)."
+                bot.reply_to(message, message_text)
+                if chat_id and chat_id != user_id:
+                    try:
+                        bot.send_message(chat_id, message_text)
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                        bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
         
         elif command == 'start':
             save_user_settings(
@@ -1203,7 +1242,14 @@ def cmd_push(message):
                 push_interval=settings['push_interval'],
                 push_enabled=True
             )
-            bot.reply_to(message, "🔔 Напоминания включены.")
+            message_text = f"🔔 @{username}, напоминания включены."
+            bot.reply_to(message, message_text)
+            if chat_id and chat_id != user_id:
+                try:
+                    bot.send_message(chat_id, message_text)
+                except Exception as e:
+                    logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                    bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
         
         elif command == 'stop':
             save_user_settings(
@@ -1213,20 +1259,40 @@ def cmd_push(message):
                 push_interval=settings['push_interval'],
                 push_enabled=False
             )
-            bot.reply_to(message, "🔕 Напоминания отключены.")
+            message_text = f"🔕 @{username}, напоминания отключены."
+            bot.reply_to(message, message_text)
+            if chat_id and chat_id != user_id:
+                try:
+                    bot.send_message(chat_id, message_text)
+                except Exception as e:
+                    logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                    bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
         
         else:
-            bot.reply_to(
-                message,
-                "❌ Неверный формат команды. Используйте:\n"
-                "/push interval <минуты>\n"
-                "/push start\n"
-                "/push stop"
+            message_text = (
+                f"❌ @{username}, неверный формат команды. Используйте:\n"
+                f"/push interval <минуты>\n"
+                f"/push start\n"
+                f"/push stop"
             )
+            bot.reply_to(message, message_text)
+            if chat_id and chat_id != user_id:
+                try:
+                    bot.send_message(chat_id, message_text)
+                except Exception as e:
+                    logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                    bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
     
     except Exception as e:
-        logger.error(f"Ошибка при выполнении команды /push: {e}")
-        bot.reply_to(message, "❌ Произошла ошибка при настройке напоминаний.")
+        logger.error(f"Ошибка при выполнении команды /push для пользователя {user_id}: {e}")
+        message_text = f"❌ @{username}, произошла ошибка при настройке напоминаний."
+        bot.reply_to(message, message_text)
+        if chat_id and chat_id != user_id:
+            try:
+                bot.send_message(chat_id, message_text)
+            except Exception as e:
+                logger.error(f"Не удалось отправить сообщение в групповой чат {chat_id}: {e}")
+                bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить сообщение в групповой чат {chat_id}.")
 
 
 # Фоновая задача для проверки изменения тренда
