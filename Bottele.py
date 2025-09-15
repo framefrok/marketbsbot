@@ -434,6 +434,7 @@ def cmd_start(message):
         "Доступные команды:\n"
         "/status - показать активные оповещения\n"
         "/history - показать историю цен\n"
+        "/stat - текущая статистика рынка\n"
         "/cancel - отменить все оповещения\n"
         "/help - подробная инструкция по использованию"
     )
@@ -542,7 +543,7 @@ def cmd_cancel(message):
     
     bot.reply_to(message, f"🗑️ Отменено {len(alerts)} оповещений.")
 
-# Команда /help
+# Команда /help (исправленная)
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     help_text = (
@@ -561,6 +562,7 @@ def cmd_help(message):
         "• /help — эта инструкция.\n"
         "• /status — показать все ваши активные оповещения и время до их срабатывания.\n"
         "• /history <ресурс> [часы] — показать историю цен. Пример: `/history Дерево 6`.\n"
+        "• /stat — показать текущую статистику рынка и максимумы за неделю.\n"
         "• /cancel — отменить все ваши активные оповещения.\n\n"
         "<b>4. Важно:</b>\n"
         "• Бот работает на основе <i>вашей личной</i> истории цен. Чем чаще вы присылаете данные рынка, тем точнее прогнозы.\n"
@@ -568,6 +570,70 @@ def cmd_help(message):
         "• Просроченные оповещения (которые не сработали вовремя) автоматически удаляются из списка активных через час."
     )
     bot.reply_to(message, help_text, parse_mode="HTML")
+
+# Команда /stat — новая команда для статистики
+@bot.message_handler(commands=['stat'])
+def cmd_stat(message):
+    try:
+        now = datetime.now()
+        text = f"📊 <b>Текущая статистика рынка</b>\n"
+        text += f"🕒 Время: {now.strftime('%d.%m.%Y %H:%M:%S')}\n\n"
+
+        resources = ["Дерево", "Камень", "Провизия", "Лошади"]
+        week_ago = int((now - timedelta(days=7)).timestamp())
+
+        for resource in resources:
+            # Текущие цены
+            latest = get_latest_data(resource)
+            if not latest:
+                text += f"🔸 {resource}: <i>нет данных</i>\n"
+                continue
+
+            current_buy = latest['buy']
+            current_sell = latest['sell']
+
+            # Максимумы за неделю
+            MarketData = Query()
+            week_records = market_table.search(
+                (MarketData.resource == resource) & (MarketData.timestamp >= week_ago)
+            )
+
+            if week_records:
+                max_buy = max(r['buy'] for r in week_records)
+                max_sell = max(r['sell'] for r in week_records)
+                min_buy = min(r['buy'] for r in week_records)
+                min_sell = min(r['sell'] for r in week_records)
+            else:
+                max_buy = current_buy
+                max_sell = current_sell
+                min_buy = current_buy
+                min_sell = current_sell
+
+            # Тренд за последние 60 минут
+            recent = get_recent_data(resource, minutes=60)
+            trend_text = "неизвестно"
+            if len(recent) >= 2:
+                speed = calculate_speed(recent, "buy")
+                trend = get_trend(recent, "buy")
+                if trend == "up":
+                    trend_text = f"растёт 📈 ({speed:+.4f}/мин)"
+                elif trend == "down":
+                    trend_text = f"падает 📉 ({speed:+.4f}/мин)"
+                else:
+                    trend_text = "стабильна ➡️"
+
+            text += (
+                f"🔸 {resource}:\n"
+                f"   Покупка: {current_buy:.2f} (max: {max_buy:.2f}, min: {min_buy:.2f})\n"
+                f"   Продажа: {current_sell:.2f} (max: {max_sell:.2f}, min: {min_sell:.2f})\n"
+                f"   Тренд: {trend_text}\n\n"
+            )
+
+        bot.reply_to(message, text, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Ошибка при выполнении команды /stat: {e}")
+        bot.reply_to(message, "❌ Произошла ошибка при получении статистики.")
 
 # Запуск фоновых задач
 def start_background_tasks():
