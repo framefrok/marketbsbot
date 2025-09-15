@@ -634,6 +634,7 @@ def cmd_history(message):
 
 
 # Команда /cancel
+# In bt6.py, modify cmd_cancel if needed
 @bot.message_handler(commands=['cancel'])
 def cmd_cancel(message):
     user_id = message.from_user.id
@@ -645,7 +646,7 @@ def cmd_cancel(message):
         return
         
     for alert in active_alerts:
-        update_alert_status(alert['id'], 'cancelled')
+        remove_alert(alert['id'])  # Use remove_alert instead of update_alert_status
     
     bot.reply_to(message, f"🗑️ Отменено {len(active_alerts)} оповещений.")
 
