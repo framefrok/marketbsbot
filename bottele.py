@@ -699,7 +699,7 @@ def cmd_stat(message):
                 f"├ 💰 Продажа:  {current_sell:>6.2f} 💰 "
                 f"(↑{max_sell:.2f} ↓{min_sell:.2f})\n"
                 f"├ 📊 Макс. кол-во: {qty_str:>10} шт.\n"
-                f"└ 📈 Тренд: {trend_icon} {trend_desc}\n\n"
+                f"└ 💱 Тренд: {trend_icon} {trend_desc}\n\n"
             )
 
         # Добавим подвал
