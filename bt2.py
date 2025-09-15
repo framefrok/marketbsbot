@@ -202,13 +202,17 @@ def get_trend(records: List[Dict], price_type: str = "buy") -> str:
 
 
 # Обработчик форварда с рынком
-@bot.message_handler(func=lambda message: message.text and ("🎪 Рынок" in message.text or message.forward_from))
+# Обработчик форварда с рынком
+@bot.message_handler(func=lambda message: message.text and ("🎪 Рынок" in message.text))
 def handle_market_forward(message):
     try:
         # Проверка на forward от бота
-        if not message.forward_from or not message.forward_from.is_bot:
-            bot.reply_to(message, "❌ Только пересылка сообщений от официального бота рынка.")
+        if not message.forward_from:
+            bot.reply_to(message, "❌ Сообщение должно быть пересылкой от бота рынка.")
             return
+
+        # Логируем информацию о пересылке для отладки
+        logger.info(f"Forwarded from: {message.forward_from.username} (ID: {message.forward_from.id}, is_bot: {message.forward_from.is_bot})")
 
         # Проверка времени: не старше часа
         current_time = time.time()
@@ -219,7 +223,7 @@ def handle_market_forward(message):
         logger.info("Обработка сообщения рынка...")
         data = parse_market_message(message.text)
         if not data:
-            bot.reply_to(message, "❌ Не удалось распознать данные рынка. Убедитесь, что формат сообщения верный.")
+            bot.reply_to(message, "❌ Не удалось распознать данные рынка. Проверьте формат сообщения.")
             return
 
         timestamp = int(message.date)
@@ -227,22 +231,30 @@ def handle_market_forward(message):
 
         for resource, prices in data.items():
             MarketData = Query()
-            # Проверка на близкий timestamp (в пределах 5 минут) для избежания дубликатов
-            close_records = market_table.search(
+            # Проверка на дубликат: совпадение ресурса, времени и цен
+            existing = market_table.get(
                 (MarketData.resource == resource) &
-                (abs(MarketData.timestamp - timestamp) <= 300)
+                (MarketData.timestamp == timestamp) &
+                (MarketData.buy == prices["buy"]) &
+                (MarketData.sell == prices["sell"])
             )
             
-            if not close_records:
-                market_table.insert({
-                    "resource": resource,
-                    "buy": prices["buy"],
-                    "sell": prices["sell"],
-                    "quantity": prices.get("quantity", 0),
-                    "timestamp": timestamp,
-                    "date": datetime.fromtimestamp(timestamp).isoformat()
-                })
-                saved_count += 1
+            if not existing:
+                try:
+                    market_table.insert({
+                        "resource": resource,
+                        "buy": prices["buy"],
+                        "sell": prices["sell"],
+                        "quantity": prices.get("quantity", 0),
+                        "timestamp": timestamp,
+                        "date": datetime.fromtimestamp(timestamp).isoformat()
+                    })
+                    saved_count += 1
+                    logger.info(f"Сохранено: {resource} - buy={prices['buy']}, sell={prices['sell']}, qty={prices['quantity']}")
+                except Exception as db_e:
+                    logger.error(f"Ошибка при записи в базу данных для {resource}: {db_e}")
+                    bot.reply_to(message, f"❌ Ошибка при сохранении данных для {resource}.")
+                    continue
 
         if saved_count > 0:
             bot.reply_to(message, f"✅ Сохранено {saved_count} записей рынка.")
@@ -257,7 +269,7 @@ def handle_market_forward(message):
             
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения рынка: {e}", exc_info=True)
-        bot.reply_to(message, "❌ Произошла ошибка при обработке данных рынка.")
+        bot.reply_to(message, f"❌ Произошла ошибка: {str(e)}. Пожалуйста, попробуйте снова или свяжитесь с поддержкой.")
 
 
 # Отправка выбора ресурса
