@@ -53,18 +53,21 @@ EMOJI_TO_RESOURCE = {
 }
 
 # Парсинг сообщения рынка
-def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, float]]]:
+# Парсинг сообщения рынка — ОБНОВЛЁННАЯ ВЕРСИЯ
+def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, Union[float, int]]]]:
     """
     Парсит сообщение рынка. Пример:
         Дерево: 96,342,449🪵
         📉Купить/продать: 8.31/6.80💰
+    Возвращает словарь с buy, sell и quantity.
     """
     lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
     resources = {}
     current_resource = None
+    current_quantity = 0
 
     # Паттерн для строки ресурса: "Название: число Эмодзи"
-    resource_pattern = r"^(.+?):\s*[\d,]*\s*([🪵🪨🍞🐴])$"
+    resource_pattern = r"^(.+?):\s*([0-9,]*)\s*([🪵🪨🍞🐴])$"
     # Паттерн для цен: "📈Купить/продать: 8.31/6.80💰"
     price_pattern = r"(?:[📈📉]?\s*)?Купить/продать:\s*([0-9.]+)\s*/\s*([0-9.]+)\s*💰"
 
@@ -75,8 +78,12 @@ def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, float]]]:
         # Проверка на строку ресурса
         res_match = re.match(resource_pattern, line)
         if res_match:
-            emoji = res_match.group(2)
-            current_resource = EMOJI_TO_RESOURCE.get(emoji, res_match.group(1).strip())
+            name_part = res_match.group(1).strip()
+            qty_str = res_match.group(2).replace(',', '').strip()
+            emoji = res_match.group(3)
+
+            current_resource = EMOJI_TO_RESOURCE.get(emoji, name_part)
+            current_quantity = int(qty_str) if qty_str.isdigit() else 0
             continue
 
         # Проверка на строку цен
@@ -87,10 +94,12 @@ def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, float]]]:
                 sell_price = float(price_match.group(2))
                 resources[current_resource] = {
                     "buy": buy_price,
-                    "sell": sell_price
+                    "sell": sell_price,
+                    "quantity": current_quantity
                 }
-                logger.info(f"Распознано: {current_resource} — покупка {buy_price}, продажа {sell_price}")
-                current_resource = None  # сброс для следующего ресурса
+                logger.info(f"Распознано: {current_resource} — покупка {buy_price}, продажа {sell_price}, кол-во {current_quantity}")
+                current_resource = None
+                current_quantity = 0
             except ValueError as e:
                 logger.error(f"Ошибка конвертации цен: {e}")
                 continue
