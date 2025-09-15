@@ -26,7 +26,7 @@ from db import (
     get_user_settings,
     update_user_settings,
     search_market_data,
-    remove_alert
+    remove_alert,
     remind_market_update
 )
 
