@@ -468,7 +468,7 @@ def cmd_start(message):
     user_data.pop(user_id, None)
     bot.reply_to(
         message,
-        "👋 Привет! Я бот для отслеживания цен на рынке в игре.\n"
+        "👋 Привет! Я бот для отслеживания цен на рынке в игре BastionSiege.\n"
         "Просто перешлите сюда сообщение с рынком (с эмодзи 🎪), и я начну анализ.\n"
         "Когда соберу достаточно данных — предложу настроить оповещение.\n\n"
         "Доступные команды:\n"
@@ -625,7 +625,7 @@ def cmd_stat(message):
         text = (
             f"📊 <b>Текущая статистика рынка</b>\n"
             f"🕗 Обновлено: {now.strftime('%d.%m.%Y %H:%M')}\n"
-            f"{'='*35}\n\n"
+            f"{'='*28}\n\n"
         )
 
         resources = list(EMOJI_TO_RESOURCE.values())
@@ -700,7 +700,8 @@ def cmd_stat(message):
             # 🖋️ Форматируем красиво
             text += (
                 f"{emoji} <b>{resource}</b>\n"
-                f"├ 💹 Покупка:   {current_buy:>6.2f} 💰 {buy_status}\n"
+                f"├ 💹 Покупка:   {current_buy:>6.2f}\n"
+                f"│ 💰 {buy_status}\n"
                 f"│   (↑{max_buy:.2f} ↓{min_buy:.2f})\n"
                 f"├ 💰 Продажа:  {current_sell:>6.2f} 💰\n"
                 f"│   (↑{max_sell:.2f} ↓{min_sell:.2f})\n"
@@ -709,8 +710,8 @@ def cmd_stat(message):
             )
 
         # Подвал
-        text += f"{'='*35}\n"
-        text += f"🟢 — у максимума | 🔴 — у минимума | 🟡 — в диапазоне\n"
+        text += f"{'='*28}\n"
+        text += f"🟢 — Max | 🔴 — Min | 🟡 — Range\n"
         text += f"📈 — рост | 📉 — падение | ➖ — стабильно\n"
         text += f"↑ — макс. цена за неделю | ↓ — мин. цена за неделю"
 
