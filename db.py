@@ -411,11 +411,6 @@ def remind_market_update():
             time.sleep(60)
 
 
-# Запуск фоновых задач
-def start_background_tasks():
-    threading.Thread(target=cleanup_expired_alerts, daemon=True).start()
-    threading.Thread(target=update_dynamic_timers, daemon=True).start()
-    threading.Thread(target=remind_market_update, daemon=True).start()
 
 
 # Запуск бота
