@@ -1029,6 +1029,14 @@ def update_dynamic_timers_once():
     except Exception as e:
         logger.error(f"Ошибка при однократном обновлении таймеров: {e}")
 
+def check_bot_permissions(chat_id: int) -> bool:
+    try:
+        chat_member = bot.get_chat_member(chat_id, bot.get_me().id)
+        return chat_member.status in ['administrator', 'creator']
+    except Exception as e:
+        logger.error(f"Ошибка при проверке прав бота в чате {chat_id}: {e}")
+        return False
+
 
 # Запуск фоновых задач
 def start_background_tasks():
