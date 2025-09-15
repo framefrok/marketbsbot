@@ -10,13 +10,15 @@ from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from tinydb import TinyDB, Query
 from dotenv import load_dotenv
 import os
-import math
 import threading
 import time
 
 # Загрузка токена
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+if not BOT_TOKEN:
+    raise ValueError("Токен бота не найден. Убедитесь, что BOT_TOKEN установлен в .env")
 
 # Настройка логирования
 logging.basicConfig(
@@ -33,70 +35,73 @@ db = TinyDB('database.json')
 market_table = db.table('market_data')
 alerts_table = db.table('alerts')
 
-# Простая система состояний (вместо aiogram FSM)
+# Простая система состояний
 user_states = {}  # user_id -> state_name
 user_data = {}    # user_id -> dict с данными (resource, direction и т.д.)
 
-# Состояния (как строки)
+# Состояния
 STATE_CHOOSING_RESOURCE = "choosing_resource"
 STATE_CHOOSING_DIRECTION = "choosing_direction"
 STATE_ENTERING_TARGET_PRICE = "entering_target_price"
 
+# Эмодзи → Название ресурса
+EMOJI_TO_RESOURCE = {
+    "🪵": "Дерево",
+    "🪨": "Камень",
+    "🍞": "Провизия",
+    "🐴": "Лошади"
+}
+
 # Парсинг сообщения рынка
 def parse_market_message(text: str) -> Optional[Dict[str, Dict[str, float]]]:
     """
-    Парсит сообщение рынка из игры и возвращает словарь цен по ресурсам.
-    Формат:
+    Парсит сообщение рынка. Пример:
         Дерево: 96,342,449🪵
         📉Купить/продать: 8.31/6.80💰
     """
-    lines = text.strip().split('\n')
-    # Паттерн для строки с ресурсом и количеством (например: "Дерево: 96,342,449🪵")
-    resource_pattern = r"^(.+?):\s*[0-9,]*\s*([🪵🪨🍞🐴])$"
-    # Паттерн для строки с ценами (например: "📉Купить/продать: 8.31/6.80💰")
-    price_pattern = r"(?:[📈📉]?\s*)?Купить/продать:\s*([0-9.]+)\s*/\s*([0-9.]+)\s*💰"
-
+    lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
     resources = {}
     current_resource = None
 
-    for line in lines:
-        line = line.strip()
-        if not line or line == "🎪 Рынок":
+    # Паттерн для строки ресурса: "Название: число Эмодзи"
+    resource_pattern = r"^(.+?):\s*[\d,]*\s*([🪵🪨🍞🐴])$"
+    # Паттерн для цен: "📈Купить/продать: 8.31/6.80💰"
+    price_pattern = r"(?:[📈📉]?\s*)?Купить/продать:\s*([0-9.]+)\s*/\s*([0-9.]+)\s*💰"
+
+    for i, line in enumerate(lines):
+        if line == "🎪 Рынок":
             continue
 
-        # Проверяем, является ли строка заголовком ресурса
+        # Проверка на строку ресурса
         res_match = re.match(resource_pattern, line)
         if res_match:
-            emoji_map = {"🪵": "Дерево", "🪨": "Камень", "🍞": "Провизия", "🐴": "Лошади"}
             emoji = res_match.group(2)
-            normalized_name = emoji_map.get(emoji, res_match.group(1).strip())
-            current_resource = normalized_name
+            current_resource = EMOJI_TO_RESOURCE.get(emoji, res_match.group(1).strip())
             continue
 
-        # Проверяем, содержит ли строка цены
+        # Проверка на строку цен
         price_match = re.search(price_pattern, line)
         if price_match and current_resource:
-            buy_str = price_match.group(1).strip()
-            sell_str = price_match.group(2).strip()
-
             try:
-                buy_price = float(buy_str)
-                sell_price = float(sell_str)
+                buy_price = float(price_match.group(1))
+                sell_price = float(price_match.group(2))
+                resources[current_resource] = {
+                    "buy": buy_price,
+                    "sell": sell_price
+                }
+                logger.info(f"Распознано: {current_resource} — покупка {buy_price}, продажа {sell_price}")
+                current_resource = None  # сброс для следующего ресурса
             except ValueError as e:
-                logger.error(f"Ошибка преобразования цен для {current_resource}: buy='{buy_str}', sell='{sell_str}' — {e}")
+                logger.error(f"Ошибка конвертации цен: {e}")
                 continue
 
-            resources[current_resource] = {
-                "buy": buy_price,
-                "sell": sell_price
-            }
-            current_resource = None  # Сбрасываем, чтобы не привязать следующие цены к этому ресурсу
-
     if not resources:
-        logger.warning("Парсер не нашёл ни одного ресурса с ценами в сообщении.")
+        logger.warning("Не удалось распознать ни одного ресурса.")
         return None
 
     return resources
+
+
 # Получение данных за последние N минут
 def get_recent_data(resource: str, minutes: int = 15) -> List[Dict]:
     MarketData = Query()
@@ -107,6 +112,7 @@ def get_recent_data(resource: str, minutes: int = 15) -> List[Dict]:
     records.sort(key=lambda x: x['timestamp'])
     return records
 
+
 # Получение последней записи для ресурса
 def get_latest_data(resource: str) -> Optional[Dict]:
     MarketData = Query()
@@ -115,6 +121,7 @@ def get_latest_data(resource: str) -> Optional[Dict]:
         return None
     records.sort(key=lambda x: x['timestamp'], reverse=True)
     return records[0]
+
 
 # Расчет скорости изменения цены
 def calculate_speed(records: List[Dict], price_type: str = "buy") -> Optional[float]:
@@ -133,25 +140,28 @@ def calculate_speed(records: List[Dict], price_type: str = "buy") -> Optional[fl
     speed = price_delta / time_delta_minutes
     return round(speed, 4)
 
+
 # Проверка тренда
 def get_trend(records: List[Dict], price_type: str = "buy") -> str:
     if len(records) < 2:
         return "stable"
     
-    first = records[0][price_type]
-    last = records[-1][price_type]
+    first_price = records[0][price_type]
+    last_price = records[-1][price_type]
     
-    if last > first:
+    if last_price > first_price:
         return "up"
-    elif last < first:
+    elif last_price < first_price:
         return "down"
     else:
         return "stable"
 
+
 # Обработчик форварда с рынком
-@bot.message_handler(func=lambda message: message.text and (message.text.startswith('🎪 Рынок') or message.forward_from))
+@bot.message_handler(func=lambda message: message.text and ("🎪 Рынок" in message.text or message.forward_from))
 def handle_market_forward(message):
     try:
+        logger.info("Обработка сообщения рынка...")
         data = parse_market_message(message.text)
         if not data:
             bot.reply_to(message, "❌ Не удалось распознать данные рынка. Убедитесь, что формат сообщения верный.")
@@ -180,38 +190,36 @@ def handle_market_forward(message):
         if saved_count > 0:
             bot.reply_to(message, f"✅ Сохранено {saved_count} записей рынка.")
             
-            any_recent = False
-            for resource in ["Дерево", "Камень", "Провизия", "Лошади"]:
-                if len(get_recent_data(resource)) >= 2:
-                    any_recent = True
+            # Проверяем, есть ли хотя бы у одного ресурса >=2 записей за 15 минут
+            for resource in EMOJI_TO_RESOURCE.values():
+                if len(get_recent_data(resource, 15)) >= 2:
+                    send_resource_selection(message.from_user.id)
                     break
-
-            if any_recent:
-                send_resource_selection(message.from_user.id)
         else:
             bot.reply_to(message, "ℹ️ Данные уже были сохранены ранее.")
             
     except Exception as e:
-        logger.error(f"Ошибка при обработке сообщения рынка: {e}")
+        logger.error(f"Ошибка при обработке сообщения рынка: {e}", exc_info=True)
         bot.reply_to(message, "❌ Произошла ошибка при обработке данных рынка.")
+
 
 # Отправка выбора ресурса
 def send_resource_selection(user_id: int):
-    buttons = []
-    for resource in ["Дерево", "Камень", "Провизия", "Лошади"]:
-        btn = InlineKeyboardButton(text=resource, callback_data=f"resource_{resource}")
-        buttons.append([btn])
-
+    buttons = [
+        [InlineKeyboardButton(text=res, callback_data=f"resource_{res}")]
+        for res in EMOJI_TO_RESOURCE.values()
+    ]
     keyboard = InlineKeyboardMarkup(buttons)
     bot.send_message(user_id, "📊 Выберите ресурс для отслеживания:", reply_markup=keyboard)
+
 
 # Обработчик выбора ресурса
 @bot.callback_query_handler(func=lambda call: call.data.startswith('resource_'))
 def process_resource_selection(call):
     bot.answer_callback_query(call.id)
-    resource = call.data.split('_')[1]
+    resource = call.data.split('_', 1)[1]
 
-    records = get_recent_data(resource)
+    records = get_recent_data(resource, 15)
     if len(records) < 2:
         bot.send_message(call.from_user.id, 
                         f"⚠️ Для {resource} недостаточно данных. Пришлите еще обновления рынка.")
@@ -235,24 +243,25 @@ def process_resource_selection(call):
     ]
     keyboard = InlineKeyboardMarkup(buttons)
     
+    speed_text = f"{abs(speed):.4f}" if speed else "неизвестно"
     bot.send_message(
         call.from_user.id, 
-        f"{trend_emoji} Вы выбрали {resource}. Текущая цена: {current_price}\n"
-        f"Тренд: {trend_text} ({abs(speed):.4f} в минуту)\n\n"
+        f"{trend_emoji} Вы выбрали {resource}. Текущая цена: {current_price:.2f}\n"
+        f"Тренд: {trend_text} ({speed_text} в минуту)\n\n"
         f"Что вас интересует?", 
         reply_markup=keyboard
     )
+
 
 # Обработчик отмены действий
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_action')
 def cancel_action(call):
     bot.answer_callback_query(call.id)
     user_id = call.from_user.id
-    if user_id in user_states:
-        del user_states[user_id]
-    if user_id in user_data:
-        del user_data[user_id]
+    user_states.pop(user_id, None)
+    user_data.pop(user_id, None)
     bot.send_message(user_id, "❌ Действие отменено.")
+
 
 # Обработчик выбора направления
 @bot.callback_query_handler(func=lambda call: call.data.startswith('direction_') and user_states.get(call.from_user.id) == STATE_CHOOSING_DIRECTION)
@@ -263,7 +272,7 @@ def process_direction_selection(call):
     user_id = call.from_user.id
     resource = user_data[user_id]["resource"]
     
-    records = get_recent_data(resource)
+    records = get_recent_data(resource, 15)
     current_price = records[-1]["buy"]
     trend = get_trend(records, "buy")
     
@@ -283,6 +292,7 @@ def process_direction_selection(call):
         f"💰 Введите целевую цену для {resource} (например: {current_price * 0.9:.2f}):"
     )
 
+
 # Обработчик ввода целевой цены
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == STATE_ENTERING_TARGET_PRICE)
 def process_target_price(message):
@@ -299,18 +309,18 @@ def process_target_price(message):
     resource = user_data[user_id]["resource"]
     direction = user_data[user_id]["direction"]
 
-    records = get_recent_data(resource)
+    records = get_recent_data(resource, 15)
     if len(records) < 2:
         bot.reply_to(message, "⚠️ Недостаточно данных для расчета скорости. Пришлите еще обновления рынка.")
-        del user_states[user_id]
-        del user_data[user_id]
+        user_states.pop(user_id, None)
+        user_data.pop(user_id, None)
         return
 
     speed = calculate_speed(records, "buy")
     if speed is None:
         bot.reply_to(message, "⚠️ Не удалось рассчитать скорость изменения цены.")
-        del user_states[user_id]
-        del user_data[user_id]
+        user_states.pop(user_id, None)
+        user_data.pop(user_id, None)
         return
 
     current_price = records[-1]["buy"]
@@ -318,7 +328,7 @@ def process_target_price(message):
 
     if (direction == "down" and target_price >= current_price) or \
        (direction == "up" and target_price <= current_price):
-        bot.reply_to(message, f"⚠️ При {('падении' if direction == 'down' else 'росте')} целевая цена должна быть {('ниже' if direction == 'down' else 'выше')} текущей ({current_price}).")
+        bot.reply_to(message, f"⚠️ При {('падении' if direction == 'down' else 'росте')} целевая цена должна быть {('ниже' if direction == 'down' else 'выше')} текущей ({current_price:.2f}).")
         return
 
     trend = get_trend(records, "buy")
@@ -329,8 +339,8 @@ def process_target_price(message):
 
     if (direction == "down" and speed >= 0) or (direction == "up" and speed <= 0):
         bot.reply_to(message, "⚠️ Цена движется не в ту сторону, чтобы достичь вашей цели. Оповещение не будет установлено.")
-        del user_states[user_id]
-        del user_data[user_id]
+        user_states.pop(user_id, None)
+        user_data.pop(user_id, None)
         return
 
     time_minutes = abs(price_diff) / abs(speed)
@@ -361,11 +371,12 @@ def process_target_price(message):
         f"Бот оповестит вас, когда цена достигнет цели."
     )
 
-    del user_states[user_id]
-    del user_data[user_id]
+    user_states.pop(user_id, None)
+    user_data.pop(user_id, None)
 
     # Запуск фоновой задачи
     threading.Thread(target=schedule_alert, args=(alert_id, user_id, resource, target_price, alert_time), daemon=True).start()
+
 
 # Фоновая задача для отправки уведомления
 def schedule_alert(alert_id: int, user_id: int, resource: str, target_price: float, alert_time: datetime):
@@ -416,6 +427,7 @@ def schedule_alert(alert_id: int, user_id: int, resource: str, target_price: flo
         logger.error(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
         alerts_table.update({'status': 'error'}, doc_ids=[alert_id])
 
+
 # Фоновая задача для очистки просроченных алертов
 def cleanup_expired_alerts():
     while True:
@@ -438,14 +450,13 @@ def cleanup_expired_alerts():
 
         time.sleep(600)  # 10 минут
 
+
 # Команда /start
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
     user_id = message.from_user.id
-    if user_id in user_states:
-        del user_states[user_id]
-    if user_id in user_data:
-        del user_data[user_id]
+    user_states.pop(user_id, None)
+    user_data.pop(user_id, None)
     bot.reply_to(
         message,
         "👋 Привет! Я бот для отслеживания цен на рынке в игре.\n"
@@ -459,6 +470,7 @@ def cmd_start(message):
         "/help - подробная инструкция по использованию"
     )
 
+
 # Команда /status
 @bot.message_handler(commands=['status'])
 def cmd_status(message):
@@ -470,10 +482,11 @@ def cmd_status(message):
         return
 
     text = "📋 Ваши активные оповещения:\n\n"
+    now = datetime.now()
     for alert in alerts:
         direction = "падение" if alert["direction"] == "down" else "рост"
         alert_time = datetime.fromisoformat(alert["alert_time"])
-        remaining = alert_time - datetime.now()
+        remaining = alert_time - now
         mins = int(remaining.total_seconds() // 60)
         secs = int(remaining.total_seconds() % 60)
         
@@ -490,6 +503,7 @@ def cmd_status(message):
             )
 
     bot.reply_to(message, text)
+
 
 # Команда /history
 @bot.message_handler(commands=['history'])
@@ -548,6 +562,7 @@ def cmd_history(message):
         logger.error(f"Ошибка при выполнении команды /history: {e}")
         bot.reply_to(message, "Произошла ошибка при получении истории цен.")
 
+
 # Команда /cancel
 @bot.message_handler(commands=['cancel'])
 def cmd_cancel(message):
@@ -563,7 +578,8 @@ def cmd_cancel(message):
     
     bot.reply_to(message, f"🗑️ Отменено {len(alerts)} оповещений.")
 
-# Команда /help (исправленная)
+
+# Команда /help
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     help_text = (
@@ -591,7 +607,8 @@ def cmd_help(message):
     )
     bot.reply_to(message, help_text)
 
-# Команда /stat — новая команда для статистики
+
+# Команда /stat
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     try:
@@ -599,11 +616,10 @@ def cmd_stat(message):
         text = f"📊 <b>Текущая статистика рынка</b>\n"
         text += f"🕒 Время: {now.strftime('%d.%m.%Y %H:%M:%S')}\n\n"
 
-        resources = ["Дерево", "Камень", "Провизия", "Лошади"]
+        resources = list(EMOJI_TO_RESOURCE.values())
         week_ago = int((now - timedelta(days=7)).timestamp())
 
         for resource in resources:
-            # Текущие цены
             latest = get_latest_data(resource)
             if not latest:
                 text += f"🔸 {resource}: <i>нет данных</i>\n"
@@ -612,7 +628,6 @@ def cmd_stat(message):
             current_buy = latest['buy']
             current_sell = latest['sell']
 
-            # Максимумы за неделю
             MarketData = Query()
             week_records = market_table.search(
                 (MarketData.resource == resource) & (MarketData.timestamp >= week_ago)
@@ -624,12 +639,9 @@ def cmd_stat(message):
                 min_buy = min(r['buy'] for r in week_records)
                 min_sell = min(r['sell'] for r in week_records)
             else:
-                max_buy = current_buy
-                max_sell = current_sell
-                min_buy = current_buy
-                min_sell = current_sell
+                max_buy = min_buy = current_buy
+                max_sell = min_sell = current_sell
 
-            # Тренд за последние 60 минут
             recent = get_recent_data(resource, minutes=60)
             trend_text = "неизвестно"
             if len(recent) >= 2:
@@ -652,15 +664,17 @@ def cmd_stat(message):
         bot.reply_to(message, text, parse_mode="HTML")
 
     except Exception as e:
-        logger.error(f"Ошибка при выполнении команды /stat: {e}")
+        logger.error(f"Ошибка при выполнении команды /stat: {e}", exc_info=True)
         bot.reply_to(message, "❌ Произошла ошибка при получении статистики.")
+
 
 # Запуск фоновых задач
 def start_background_tasks():
     threading.Thread(target=cleanup_expired_alerts, daemon=True).start()
 
+
 # Запуск бота
 if __name__ == '__main__':
-    logger.info("Бот запущен...")
+    logger.info("🚀 Бот запущен и готов к работе!")
     start_background_tasks()
-    bot.polling(none_stop=True)
+    bot.polling(none_stop=True, interval=0, timeout=20)
