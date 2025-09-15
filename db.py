@@ -347,10 +347,3 @@ def update_user_settings(user_id: int, has_anchor: bool, trade_level: int, push_
     except Error as e:
         print(f"Ошибка при обновлении настроек пользователя: {e}")
 
-
-
-# Запуск бота
-if __name__ == '__main__':
-    logger.info("🚀 Бот запущен и готов к работе!")
-    start_background_tasks()
-    bot.polling(none_stop=True, interval=0, timeout=20)
