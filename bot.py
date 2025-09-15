@@ -476,7 +476,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "Доступные команды:\n"
         "/status - показать активные оповещения\n"
         "/history - показать историю цен\n"
-        "/cancel - отменить все оповещения"
+        "/cancel - отменить все оповещения\n"
         "/help - подробная инструкция по использованию"
         
     )
@@ -635,3 +635,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
