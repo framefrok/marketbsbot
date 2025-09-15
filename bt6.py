@@ -26,8 +26,8 @@ from db import (
     get_user_settings,
     update_user_settings,
     search_market_data,
-    remove_alert,
-    remind_market_update
+    remove_alert
+
 )
 
 # Загрузка токена
@@ -1029,6 +1029,7 @@ def update_dynamic_timers_once():
     except Exception as e:
         logger.error(f"Ошибка при однократном обновлении таймеров: {e}")
 
+# В bt6.py, перед start_background_tasks
 def check_bot_permissions(chat_id: int) -> bool:
     try:
         chat_member = bot.get_chat_member(chat_id, bot.get_me().id)
@@ -1037,6 +1038,67 @@ def check_bot_permissions(chat_id: int) -> bool:
         logger.error(f"Ошибка при проверке прав бота в чате {chat_id}: {e}")
         return False
 
+def remind_market_update():
+    while True:
+        try:
+            active_alerts = get_active_alerts()
+            if not active_alerts:
+                time.sleep(60)
+                continue
+            
+            user_alerts = {}
+            for alert in active_alerts:
+                user_id = alert['user_id']
+                if user_id not in user_alerts:
+                    user_alerts[user_id] = []
+                user_alerts[user_id].append(alert)
+            
+            for user_id, alerts in user_alerts.items():
+                settings = get_user_settings(user_id)
+                if not settings['push_enabled']:
+                    continue
+                
+                push_interval = settings['push_interval']
+                resources = set(alert['resource'] for alert in alerts)
+                data_updated = False
+                cutoff_time = int((datetime.now() - timedelta(minutes=15)).timestamp())
+                
+                for resource in resources:
+                    recent_records = get_recent_market_data(resource, 15)
+                    if recent_records:
+                        data_updated = True
+                        break
+                
+                if data_updated:
+                    continue
+                
+                resources_text = ', '.join(resources)
+                username = bot.get_chat_member(user_id, user_id).user.username or 'User'
+                reminder_text = (
+                    f"📢 @{username}, данные рынка для {resources_text} не обновлялись более 15 минут.\n"
+                    f"Пожалуйста, перешлите новое сообщение с рынка (🎪), чтобы улучшить точность таймеров."
+                )
+                
+                bot.send_message(user_id, reminder_text)
+                
+                group_chats = set(alert.get('chat_id') for alert in alerts if alert.get('chat_id') and alert.get('chat_id') != user_id)
+                for chat_id in group_chats:
+                    if check_bot_permissions(chat_id):
+                        try:
+                            bot.send_message(chat_id, reminder_text)
+                        except Exception as e:
+                            logger.error(f"Не удалось отправить напоминание в групповой чат {chat_id}: {e}")
+                            bot.send_message(user_id, f"⚠️ @{username}, не удалось отправить напоминание в групповой чат {chat_id}.")
+                    else:
+                        logger.error(f"Бот не имеет прав для отправки сообщений в групповой чат {chat_id}")
+                        bot.send_message(user_id, f"⚠️ @{username}, бот не имеет прав для отправки сообщений в групповой чат {chat_id}. Пожалуйста, добавьте бота как администратора.")
+            
+            min_interval = min(settings['push_interval'] for settings in (get_user_settings(user_id) for user_id in user_alerts.keys()) if settings['push_enabled'])
+            time.sleep(min_interval * 60)
+        
+        except Exception as e:
+            logger.error(f"Ошибка в задаче напоминания об обновлении данных: {e}")
+            time.sleep(60)
 
 # Запуск фоновых задач
 def start_background_tasks():
