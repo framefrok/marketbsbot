@@ -69,9 +69,6 @@ EMOJI_TO_RESOURCE = {
     "🐴": "Лошади"
 }
 
-# Получение настроек пользователя
-def get_user_settings(user_id: int) -> Dict[str, Union[bool, int]]:
-    return get_user_settings(user_id)
 
 # Сохранение настроек пользователя
 def save_user_settings(user_id: int, has_anchor: bool, trade_level: int, push_interval: int = 30, push_enabled: bool = True):
