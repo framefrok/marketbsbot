@@ -290,8 +290,6 @@ async def process_direction_selection(callback_query: types.CallbackQuery, state
 
 # Обработчик ввода целевой цены
 @dp.message(AlertSetup.entering_target_price)
-# Обработчик ввода целевой цены
-@dp.message(AlertSetup.entering_target_price)
 async def process_target_price(message: types.Message, state: FSMContext):
     try:
         target_price = float(message.text.strip().replace(',', '.'))
@@ -635,4 +633,5 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
 
