@@ -617,7 +617,7 @@ def cmd_help(message):
     bot.reply_to(message, help_text)
 
 
-# Команда /stat — улучшенная версия
+# Команда /stat — улучшенная версия с контекстом текущей цены
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     try:
@@ -631,7 +631,7 @@ def cmd_stat(message):
         resources = list(EMOJI_TO_RESOURCE.values())
         week_ago = int((now - timedelta(days=7)).timestamp())
 
-        # Эмодзи для ресурсов (для красоты)
+        # Эмодзи для ресурсов
         RESOURCE_EMOJI = {
             "Дерево": "🪵",
             "Камень": "🪨",
@@ -650,28 +650,22 @@ def cmd_stat(message):
             current_sell = latest['sell']
 
             MarketData = Query()
-            # Ищем все записи за неделю
             week_records = market_table.search(
                 (MarketData.resource == resource) & (MarketData.timestamp >= week_ago)
             )
 
             if week_records:
-                # Макс/мин цены
                 max_buy = max(r['buy'] for r in week_records)
                 max_sell = max(r['sell'] for r in week_records)
                 min_buy = min(r['buy'] for r in week_records)
                 min_sell = min(r['sell'] for r in week_records)
-                # Макс количество (если есть в данных)
-                max_qty = max(
-                    (r.get('quantity', 0) for r in week_records),
-                    default=0
-                )
+                max_qty = max((r.get('quantity', 0) for r in week_records), default=0)
             else:
                 max_buy = min_buy = current_buy
                 max_sell = min_sell = current_sell
                 max_qty = 0
 
-            # Тренд за последние 60 минут
+            # Тренд за 60 минут
             recent = get_recent_data(resource, minutes=60)
             trend_icon = "❓"
             trend_desc = "неизвестно"
@@ -688,22 +682,35 @@ def cmd_stat(message):
                     trend_icon = "➖"
                     trend_desc = "стабильна"
 
-            # Форматируем количество с разделителями тысяч
+            # 🎯 КОНТЕКСТ ТЕКУЩЕЙ ЦЕНЫ ПОКУПКИ
+            if max_buy > min_buy:
+                buy_position = (current_buy - min_buy) / (max_buy - min_buy) * 100
+                if buy_position >= 85:
+                    buy_status = "🟢 у максимума"
+                elif buy_position <= 15:
+                    buy_status = "🔴 у минимума"
+                else:
+                    buy_status = "🟡 в диапазоне"
+            else:
+                buy_status = "➖ без изменений"
+
+            # Формат количества
             qty_str = f"{max_qty:,}".replace(",", " ") if max_qty > 0 else "не учтено"
 
-            # Форматируем красиво
+            # 🖋️ Форматируем красиво
             text += (
                 f"{emoji} <b>{resource}</b>\n"
-                f"├ 💹 Покупка:   {current_buy:>6.2f} 💰 "
-                f"(↑{max_buy:.2f} ↓{min_buy:.2f})\n"
-                f"├ 💰 Продажа:  {current_sell:>6.2f} 💰 "
-                f"(↑{max_sell:.2f} ↓{min_sell:.2f})\n"
+                f"├ 💹 Покупка:   {current_buy:>6.2f} 💰 {buy_status}\n"
+                f"│   (↑{max_buy:.2f} ↓{min_buy:.2f})\n"
+                f"├ 💰 Продажа:  {current_sell:>6.2f} 💰\n"
+                f"│   (↑{max_sell:.2f} ↓{min_sell:.2f})\n"
                 f"├ 📊 Макс. кол-во: {qty_str:>10} шт.\n"
                 f"└ 💱 Тренд: {trend_icon} {trend_desc}\n\n"
             )
 
-        # Добавим подвал
+        # Подвал
         text += f"{'='*35}\n"
+        text += f"🟢 — у максимума | 🔴 — у минимума | 🟡 — в диапазоне\n"
         text += f"📈 — рост | 📉 — падение | ➖ — стабильно\n"
         text += f"↑ — макс. цена за неделю | ↓ — мин. цена за неделю"
 
@@ -712,7 +719,6 @@ def cmd_stat(message):
     except Exception as e:
         logger.error(f"Ошибка при выполнении команды /stat: {e}", exc_info=True)
         bot.reply_to(message, "❌ Произошла ошибка при получении статистики.")
-
 
 # Запуск фоновых задач
 def start_background_tasks():
