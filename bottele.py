@@ -617,21 +617,20 @@ def cmd_help(message):
     bot.reply_to(message, help_text)
 
 
-# Команда /stat — улучшенная версия с контекстом текущей цены
+# Команда /stat — с прогнозом текущей цены и улучшенным дизайном
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     try:
         now = datetime.now()
         text = (
-            f"📊 <b>Текущая статистика рынка</b>\n"
+            f"<b>📊 Текущая статистика рынка</b>\n"
             f"🕗 Обновлено: {now.strftime('%d.%m.%Y %H:%M')}\n"
-            f"{'='*28}\n\n"
+            f"{'─' * 30}\n\n"
         )
 
         resources = list(EMOJI_TO_RESOURCE.values())
         week_ago = int((now - timedelta(days=7)).timestamp())
 
-        # Эмодзи для ресурсов
         RESOURCE_EMOJI = {
             "Дерево": "🪵",
             "Камень": "🪨",
@@ -643,11 +642,13 @@ def cmd_stat(message):
             emoji = RESOURCE_EMOJI.get(resource, "🔸")
             latest = get_latest_data(resource)
             if not latest:
-                text += f"{emoji} <b>{resource}</b>: ❌ нет данных\n\n"
+                text += f"{emoji} <b>{resource}</b> — ❌ нет данных\n\n"
                 continue
 
-            current_buy = latest['buy']
-            current_sell = latest['sell']
+            # Последние сохранённые цены
+            last_buy = latest['buy']
+            last_sell = latest['sell']
+            last_timestamp = latest['timestamp']
 
             MarketData = Query()
             week_records = market_table.search(
@@ -661,59 +662,59 @@ def cmd_stat(message):
                 min_sell = min(r['sell'] for r in week_records)
                 max_qty = max((r.get('quantity', 0) for r in week_records), default=0)
             else:
-                max_buy = min_buy = current_buy
-                max_sell = min_sell = current_sell
+                max_buy = min_buy = last_buy
+                max_sell = min_sell = last_sell
                 max_qty = 0
 
-            # Тренд за 60 минут
+            # 📈 Рассчитываем ТЕКУЩУЮ цену на основе тренда за последние 60 минут
             recent = get_recent_data(resource, minutes=60)
-            trend_icon = "❓"
-            trend_desc = "неизвестно"
+            current_buy = last_buy  # по умолчанию
+            current_sell = last_sell
+            trend_desc = "неизвестен"
+            trend_icon = "⏸️"
+
             if len(recent) >= 2:
-                speed = calculate_speed(recent, "buy")
-                trend = get_trend(recent, "buy")
-                if trend == "up":
+                speed_buy = calculate_speed(recent, "buy")
+                speed_sell = calculate_speed(recent, "sell")
+                trend_buy = get_trend(recent, "buy")
+
+                # Экстраполируем текущую цену
+                elapsed_minutes = (now.timestamp() - last_timestamp) / 60.0
+                if speed_buy is not None:
+                    current_buy = last_buy + speed_buy * elapsed_minutes
+                if speed_sell is not None:
+                    current_sell = last_sell + speed_sell * elapsed_minutes
+
+                # Описание тренда
+                if trend_buy == "up":
                     trend_icon = "📈"
-                    trend_desc = f"растёт ({speed:+.4f}/мин)"
-                elif trend == "down":
+                    trend_desc = f"растёт ({speed_buy:+.4f}/мин)"
+                elif trend_buy == "down":
                     trend_icon = "📉"
-                    trend_desc = f"падает ({speed:+.4f}/мин)"
+                    trend_desc = f"падает ({speed_buy:+.4f}/мин)"
                 else:
                     trend_icon = "➖"
-                    trend_desc = "стабильна"
-
-            # 🎯 КОНТЕКСТ ТЕКУЩЕЙ ЦЕНЫ ПОКУПКИ
-            if max_buy > min_buy:
-                buy_position = (current_buy - min_buy) / (max_buy - min_buy) * 100
-                if buy_position >= 85:
-                    buy_status = "🟢 у максимума"
-                elif buy_position <= 15:
-                    buy_status = "🔴 у минимума"
-                else:
-                    buy_status = "🟡 в диапазоне"
-            else:
-                buy_status = "➖ без изменений"
+                    trend_desc = "стабилен"
 
             # Формат количества
             qty_str = f"{max_qty:,}".replace(",", " ") if max_qty > 0 else "не учтено"
 
-            # 🖋️ Форматируем красиво
+            # 🖋️ Форматируем красиво и информативно
             text += (
                 f"{emoji} <b>{resource}</b>\n"
-                f"├ 💹 Покупка:   {current_buy:>6.2f}\n"
-                f"│ 💰 {buy_status}\n"
-                f"│   (↑{max_buy:.2f} ↓{min_buy:.2f})\n"
-                f"├ 💰 Продажа:  {current_sell:>6.2f} 💰\n"
-                f"│   (↑{max_sell:.2f} ↓{min_sell:.2f})\n"
-                f"├ 📊 Макс. кол-во: {qty_str:>10} шт.\n"
-                f"└ 💱 Тренд: {trend_icon} {trend_desc}\n\n"
+                f"├ 🕒 Последнее обновление: {datetime.fromtimestamp(last_timestamp).strftime('%H:%M')}\n"
+                f"├ 💹 Покупка:   {current_buy:>7.3f} (было: {last_buy:.3f})\n"
+                f"│   Диапазон за неделю: {min_buy:.3f} — {max_buy:.3f}\n"
+                f"├ 💰 Продажа:  {current_sell:>7.3f} (было: {last_sell:.3f})\n"
+                f"│   Диапазон за неделю: {min_sell:.3f} — {max_sell:.3f}\n"
+                f"├ 📦 Макс. объём: {qty_str:>12} шт.\n"
+                f"└ 📊 Тренд: {trend_icon} {trend_desc}\n\n"
             )
 
         # Подвал
-        text += f"{'='*28}\n"
-        text += f"🟢 — Max | 🔴 — Min | 🟡 — Range\n"
+        text += f"{'─' * 30}\n"
         text += f"📈 — рост | 📉 — падение | ➖ — стабильно\n"
-        text += f"↑ — макс. цена за неделю | ↓ — мин. цена за неделю"
+        text += f"Цены экстраполированы на основе тренда за 60 мин."
 
         bot.reply_to(message, text, parse_mode="HTML")
 
