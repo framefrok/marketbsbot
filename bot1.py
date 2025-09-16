@@ -1033,7 +1033,7 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Регистрация обработчиков
-    application.add_handler(MessageHandler(filters.TEXT & filters.FORWARD & filters.Regex(r"🎪 Рынок"), handle_market_forward))
+    application.add_handler(MessageHandler(filters.TEXT & filters.FORWARDED & filters.Regex(r"🎪 Рынок"), handle_market_forward))
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CommandHandler("history", cmd_history))
